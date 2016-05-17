@@ -17,6 +17,35 @@ calling process.
 
 On the server side, a separate process is spawned for each request received.
 
+## Building
+
+### Compile
+```
+make
+```
+
+### Run tests
+Common test suite
+```
+make test
+```
+
+Native RPC load test
+```
+make rpc_load_test
+```
+
+ERPC load test
+```
+make erpc_load_test
+```
+
+### Dialyzer checks
+
+```
+make dialyze
+```
+
 ## Configuration
 
 Example configuration is shown below. Copy the `erpc` section into your `sys.config` and edit as appropriate.
@@ -28,7 +57,7 @@ Example configuration is shown below. Copy the `erpc` section into your `sys.con
          %% to connect into this node. Node level ACLs take precedence over
          %% host level ACLs
          %%
-         {default_node_acl, deny}, %% 
+         {default_node_acl, deny},
 
          %%
          %% Change to 'allow' if you want nodes on any host
@@ -38,15 +67,17 @@ Example configuration is shown below. Copy the `erpc` section into your `sys.con
 
          %% {Module, Function} to output trace messages from the erpc
          %% application. Remove this config item if you don't want any
-         %% trace messages from this application.
+         %% trace messages from this application. If a different
+         %% {Module, Function} is configured it should be accept
+         %% arguments in the same format as io:format/2
          {logger_mf, {io, format}},
 
          %%
          {client_config, [
                           {a@localhost, [
-                                        {hosts, [{"127.0.0.1", 9090}]},
-                                        {num_connections, 1} %% Optional config item. Defaults to 1
-                                       ]
+                                         {hosts, [{"127.0.0.1", 9090}]},
+                                         {num_connections, 1} %% Optional config item. Defaults to 1
+                                        ]
                           },
                           %%
                           %% This is an example of a load balanced endpoint. Calls such as
@@ -55,21 +86,24 @@ Example configuration is shown below. Copy the `erpc` section into your `sys.con
                           %%
                           {'DB', [
                                         {hosts, [{"10.1.1.1", 9090},
-                                                 {"10.2.2.2", 9090}
+                                                 {"10.2.2.2", 9090},
+                                                 "10.3.3.3"  %% In this case, erpc assumes a port value of 9090
                                                 ]
-                                        },
-                                        {num_connections, 1}
-                                       ]
+                                        }
+                                 ]
                           },
                           {c@localhost, [
-                                        {hosts, [{"127.0.0.1", 9092}]},
-                                        {num_connections, 1}
-                                       ]
+                                         {hosts, [{"127.0.0.1", 9092}]}
+                                        ]
                           }
 			 ]
          },
          {server_config, [
+                          %% Default listen port is 9090
 			  {listen_port, 9090},
+
+                          %% Default transport is tcp. Supported values are 'tcp' or 'ssl'
+                          {transport, tcp},
 
                           %% ACLs specified here take precedence over
                           %% the 'default_host_acl' setting
@@ -110,20 +144,6 @@ None. Yay!
 1. Bi-directional connections as an option
 1. Monitoring of node connections (similar to erlang:monitor_node/2)
 1. SCTP support
-
-## Types
-
-```erlang
--type conn_name()       :: atom().
--type node_name()       :: atom(). %% An Erlang style node name
--type num_connections() :: integer().
-
--type port_number()     :: pos_integer().
--type hostname()        :: string().
--type host_spec()       :: {hostname(), port_number()}
--type conn_option()     :: {hosts, [host_spec()]} | {num_connections, pos_integer()}.
--type conn_status()     :: boolean().
-```
 
 ## Example usage
 
@@ -218,6 +238,20 @@ ok
 22> erpc:conn_status().                    
 [{'TEST_3',false},{'TEST_2',true},{'TEST_1',true}]
 
+```
+
+## Types
+
+```erlang
+-type conn_name()       :: atom().
+-type node_name()       :: atom(). %% An Erlang style node name
+-type num_connections() :: integer().
+
+-type port_number()     :: pos_integer().
+-type hostname()        :: string().
+-type host_spec()       :: {hostname(), port_number()}
+-type conn_option()     :: {hosts, [host_spec()]} | {num_connections, pos_integer()}.
+-type conn_status()     :: boolean().
 ```
 
 ## API
@@ -344,3 +378,7 @@ Req/sec                      : 90909
 
 ...
 ```
+
+## License
+
+Apache 2.0
