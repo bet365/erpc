@@ -6,13 +6,14 @@ test: stop_test_nodes start_test_nodes ct stop_test_nodes
 
 start_test_nodes:
 	@echo "Starting test node 1..."
-	@erl -pa ebin -sname erpc_test_1@localhost -config test/erpc_test_1_sys -s erpc_app start -detached
+	@erl -pa ebin -pz test -sname erpc_test_1@localhost -config test/erpc_test_1_sys -s erpc_app start -detached
 	@echo "Starting test node 2..."
-	@erl -pa ebin -sname erpc_test_2@localhost -config test/erpc_test_2_sys -s erpc_app start -detached
+	@erl -pa ebin -pz test -sname erpc_test_2@localhost -config test/erpc_test_2_sys -s erpc_app start -detached
 
 stop_test_nodes:
+	@echo "Stopping any existing test nodes..."
 	@erl -sname erpc_test_node_killer -noinput +B \
-	-eval 'rpc:async_call(erpc_test_1@localhost, init, stop, []), rpc:async_call(erpc_test_2@localhost, init, stop, []), timer:sleep(1000), erlang:halt().'
+	-eval 'rpc:async_call(erpc_test_1@localhost, erlang, halt, []), rpc:async_call(erpc_test_2@localhost, erlang, halt, []), timer:sleep(1000), erlang:halt().'
 
 LOAD_TEST_NUM_WORKERS=20000
 LOAD_TEST_NUM_REQS_PER_WORKER=100

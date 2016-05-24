@@ -20,19 +20,28 @@
 
 -module(erpc).
 -export([
+         abcast/3,
+         async_call/4,
+         block_call/4,
+         block_call/5,
          call/4,
          call/5,
          cast/4,
+         conn_status/0,
+         connect/1,
+         connect/2,
+         disconnect/1,
+         eval_everywhere/4,
+         incoming_conns/0,
+         is_connected/1,
          multicall/4,
          multicall/5,
          multicast/4,
-         conn_status/0,
-         is_connected/1,
-         incoming_conns/0,
+         nb_yield/1,
+         nb_yield/2,
          outgoing_conns/0,
-         connect/1,
-         connect/2,
-         disconnect/1
+         sbcast/3,
+         yield/1
         ]).
 
 call(Name, M, F, A) when is_atom(Name),
@@ -48,6 +57,26 @@ call(Name, M, F, A, Timeout) when is_atom(Name),
                                   ((is_integer(Timeout) andalso (Timeout >= 0)) orelse
                                    (Timeout == infinity)) ->
     erpc_client:call(Name, M, F, A, Timeout).
+
+block_call(Name, M, F, A) when is_atom(Name),
+                               is_atom(M),
+                               is_atom(F),
+                               is_list(A) ->
+    block_call(Name, M, F, A, 5000).
+
+block_call(Name, M, F, A, Timeout) when is_atom(Name),
+                                        is_atom(M),
+                                        is_atom(F),
+                                        is_list(A),
+                                        ((is_integer(Timeout) andalso (Timeout >= 0)) orelse
+                                                                                        (Timeout == infinity)) ->
+    erpc_client:block_call(Name, M, F, A, Timeout).
+
+abcast(Node_names, Proc_name, Msg) ->
+    erpc_client:abcast(Node_names, Proc_name, Msg).
+
+sbcast(Node_names, Proc_name, Msg) ->
+    erpc_client:sbcast(Node_names, Proc_name, Msg).
 
 cast(Name, M, F, A) when is_atom(Name),
                          is_atom(M),
@@ -84,6 +113,9 @@ wait_for_pids([Pid | T], Acc, Bad_nodes) ->
 wait_for_pids([], Acc, Bad_nodes) ->
     {Acc, Bad_nodes}.
 
+eval_everywhere(Names, M, F, A) ->
+    multicast(Names, M, F, A).
+
 multicast(Names, M, F, A) ->
     lists:foreach(
       fun(X_name) ->
@@ -112,4 +144,37 @@ connect(Conn_name, Conn_config) ->
 
 disconnect(Conn_name) ->
     erpc_sup:disconnect(Conn_name).
+
+%% Now for an asynchronous rpc.
+%% An asyncronous version of rpc that is faster for series of
+%% rpc's towards the same node. I.e. it returns immediately and 
+%% it returns a Key that can be used in a subsequent yield(Key).
+
+async_call(Name, Mod, Fun, Args) ->
+    ReplyTo = self(),
+    spawn(
+      fun() ->
+	      R = call(Name, Mod, Fun, Args),         %% proper rpc
+	      ReplyTo ! {self(), {promise_reply, R}}  %% self() is key
+      end).
+
+yield(Key) when is_pid(Key) ->
+    {value,R} = do_yield(Key, infinity),
+    R.
+
+nb_yield(Key, infinity=Inf) when is_pid(Key) ->
+    do_yield(Key, Inf);
+nb_yield(Key, Timeout) when is_pid(Key), is_integer(Timeout), Timeout >= 0 ->
+    do_yield(Key, Timeout).
+
+nb_yield(Key) when is_pid(Key) ->
+    do_yield(Key, 0).
+
+do_yield(Key, Timeout) ->
+    receive
+        {Key,{promise_reply,R}} ->
+            {value,R}
+        after Timeout ->
+            timeout
+    end.
 

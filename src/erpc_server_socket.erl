@@ -173,6 +173,14 @@ handle_incoming_data(Data,
                         ok
                 end,
             {noreply, State};
+        {block_call, Call_ref, Mod, Fun, Args} ->
+            _ = case is_mf_allowed(Mod, Fun, ACL) of
+                    true ->
+                        worker(Call_ref, TMod, Mod, Fun, Args, Conn_handle);
+                    false ->
+                        ok
+                end,
+            {noreply, State};
         {cast, Mod, Fun, Args} ->
             _ = case is_mf_allowed(Mod, Fun, ACL) of
                     true ->
@@ -183,18 +191,24 @@ handle_incoming_data(Data,
                         ok
                 end,
             {noreply, State};
+        {abcast, Proc_name, Msg} ->
+            catch Proc_name ! Msg,
+            {noreply, State};
+        {sbcast, Call_ref, Proc_name, Msg} ->
+            _ = worker(Call_ref, Proc_name, Msg, TMod, Conn_handle),
+            {noreply, State};
         {identity, Peer_node} ->
             log_msg("Server connected to peer node: ~p~n", [Peer_node]),
             ets:insert(erpc_incoming_conns, {self(), Peer_host, Peer_node}),
             send_node_identity(State),
-            ACL = get_node_acl(Peer_node, State#state.acl),
-            case ACL of
+            ACL_node = get_node_acl(Peer_node, State#state.acl),
+            case ACL_node of
                 deny ->
                     ok = TMod:close(Conn_handle),
                     _  = cleanup(State),
                     {stop, normal, State};
                 _ ->
-                    {noreply, State#state{acl = ACL, peer_node = Peer_node}}
+                    {noreply, State#state{acl = ACL_node, peer_node = Peer_node}}
             end
     end.
 
@@ -216,6 +230,16 @@ worker(Call_ref, TMod, Mod, Fun, Args, Conn_handle) ->
     Reply = term_to_binary({call_result, Call_ref, Res}),
     ok = TMod:send(Conn_handle, Reply).
 
+worker(Call_ref, Proc_name, Msg, TMod, Conn_handle) ->
+    Res = case catch Proc_name ! Msg of
+                {'EXIT', _} ->
+                    {sbcast_failed, Call_ref};
+                Msg ->
+                    {sbcast_success, Call_ref}
+            end,
+    Reply = term_to_binary(Res),
+    ok = TMod:send(Conn_handle, Reply).
+
 get_host_acl(Host) ->
     Server_config = application:get_env(erpc, server_config, []),
     ACLs          = proplists:get_value(host_acls, Server_config, []),
@@ -228,7 +252,7 @@ get_host_acl(Host) ->
 
 get_node_acl(Node, Host_acl) ->
     Server_config = application:get_env(erpc, server_config, []),
-    ACLs          = proplists:get_value(host_acls, Server_config, []),
+    ACLs          = proplists:get_value(node_acls, Server_config, []),
     case lists:keyfind(Node, 1, ACLs) of
         false ->
             case application:get_env(erpc, default_node_acl) of

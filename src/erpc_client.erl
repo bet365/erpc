@@ -26,7 +26,10 @@
          %% API
          start_link/1,
          call/5,
+         block_call/5,
+         abcast/3,
          cast/4,
+         sbcast/3,
 
          %% gen_server callbacks
          init/1,
@@ -65,6 +68,17 @@ call(Name, M, F, A, Timeout) ->
             {badrpc, not_connected}
     end.
 
+block_call(Name, M, F, A, Timeout) ->
+    case erpc_lb:get_conn_pid(Name) of
+        {ok, {_Pid, TMod, Conn_handle}} ->
+            Call_ref = make_call_ref(),
+            ok = TMod:send(Conn_handle, term_to_binary({block_call, Call_ref, M, F, A})),
+            Resp = wait_for_reply(Timeout, Call_ref),
+            Resp;
+        _ ->
+            {badrpc, not_connected}
+    end.
+
 make_call_ref() ->
     case catch erlang:unique_integer([monotonic]) of
         {'EXIT', _} ->
@@ -90,6 +104,61 @@ cast(Name, M, F, A) ->
         _ ->
             {badrpc, not_connected}
     end.
+
+abcast([], _Proc_name, _Msg) ->
+    abcast;
+abcast([Name | T], Proc_name, Msg) ->
+    case erpc_lb:get_conn_pid(Name) of
+        {ok, {_Pid, TMod, Conn_handle}} ->
+            ok = TMod:send(Conn_handle, term_to_binary({abcast, Proc_name, Msg}));
+        _ ->
+            ok
+    end,
+    abcast(T, Proc_name, Msg).
+
+sbcast(Names, Proc_name, Msg) when is_list(Names) ->
+    Parent_pid = self(),
+    Pids = lists:map(
+             fun(X_name) ->
+                     spawn(
+                       fun() ->
+                               sbcast(Parent_pid, X_name, Proc_name, Msg)
+                       end)
+             end, Names),
+    wait_for_sbcast_results(Pids).
+
+sbcast(Parent_pid, Name, Proc_name, Msg) when is_atom(Name) ->
+    case erpc_lb:get_conn_pid(Name) of
+        {ok, {_Pid, TMod, Conn_handle}} ->
+            Call_ref = make_call_ref(),
+            ok = TMod:send(Conn_handle, term_to_binary({sbcast, Call_ref, Proc_name, Msg})),
+            Resp = wait_for_sbcast_reply(Parent_pid, Name, Call_ref),
+            Resp;
+        _ ->
+            Parent_pid ! {sbcast_failed, self(), Name}
+    end.
+
+wait_for_sbcast_reply(Parent_pid, Name, Call_ref) ->
+    receive
+        {sbcast_success, Call_ref} ->
+            Parent_pid ! {sbcast_success, self(), Name};
+        {sbcast_failed, Call_ref} ->
+            Parent_pid ! {sbcast_failed, self(), Name}
+    end.
+
+wait_for_sbcast_results(Pids) ->
+    wait_for_sbcast_results(Pids, [], []).
+
+wait_for_sbcast_results([], Good, Bad) ->
+    {Good, Bad};
+wait_for_sbcast_results([Pid | T], Good, Bad) ->
+    receive
+        {sbcast_success, Pid, Name} ->
+            wait_for_sbcast_results(T, [Name | Good], Bad);
+        {sbcast_failed, Pid, Name} ->
+            wait_for_sbcast_results(T, Good, [Name | Bad])
+    end.
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -199,6 +268,12 @@ handle_incoming_data(#client_state{conn_handle = Conn_handle,
         heartbeat ->
             {noreply, State#client_state{missed_heartbeats = 0}};
         {call_result, {_, Caller_pid} = _Call_ref, _Res} = Call_result ->
+            Caller_pid ! Call_result,
+            {noreply, State};
+        {sbcast_failed, {_, Caller_pid} = _Call_ref} = Call_result ->
+            Caller_pid ! Call_result,
+            {noreply, State};
+        {sbcast_success, {_, Caller_pid} = _Call_ref} = Call_result ->
             Caller_pid ! Call_result,
             {noreply, State};
         {identity, Peer_node} ->

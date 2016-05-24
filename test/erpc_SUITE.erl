@@ -35,7 +35,7 @@
 %% @end
 %%--------------------------------------------------------------------
 suite() ->
-    [{timetrap,{seconds,30}}].
+    [{timetrap,{seconds,5}}].
 
 %%--------------------------------------------------------------------
 %% @spec init_per_suite(Config0) ->
@@ -49,7 +49,11 @@ init_per_suite(Config) ->
     application:load(erpc),
     application:set_env(erpc, server_config, [{transport, tcp},
                                               {listen_port, 9090},
-                                              {default_node_acl, allow}]),
+                                              {default_node_acl, deny},
+                                              {default_host_acl, deny},
+                                              {node_acls, [{node(), allow}]},
+                                              {host_acls, [{{127,0,0,1}, allow}]}
+                                             ]),
     _Res = application:ensure_all_started(erpc),
     ok = erpc:connect(?TEST_NODE_1, [{transport, tcp},
                                      {hosts, [{"localhost", 9091}]}]),
@@ -69,11 +73,6 @@ init_per_suite(Config) ->
 %%--------------------------------------------------------------------
 end_per_suite(_Config) ->
     application:stop(erpc),
-    %% Slave_nodes = get_value(slave_nodes, Config),
-    %% lists:foreach(
-    %%   fun(X) ->
-    %%           rpc:async_call(X, init, stop, [])
-    %%   end, Slave_nodes),
     ok.
 
 %%--------------------------------------------------------------------
@@ -144,10 +143,13 @@ groups() ->
 %% Reason = term()
 %% @end
 %%--------------------------------------------------------------------
-all() -> 
+all() ->
     [erpc_connect_test,
      erpc_call_test,
+     erpc_block_call_test,
      erpc_cast_test,
+     erpc_abcast_test,
+     erpc_sbcast_test,
      erpc_multicall_test,
      erpc_multicast_test,
      erpc_disconnect_test,
@@ -174,11 +176,60 @@ erpc_call_test(_Config) ->
     ?assertEqual(?TEST_NODE_1, erpc:call(?TEST_NODE_1, erlang, node, [])),
     ?assertEqual(?TEST_NODE_2, erpc:call(?TEST_NODE_2, erlang, node, [])).
 
+erpc_block_call_test(_Config) ->
+    %% The first called function issues a "blocking" (from the server
+    %% perspective) RPC call.
+    %% The second call is "non-blocking" but will only succeed if it
+    %% is executed after the first
+    Parent = self(),
+    Pid = spawn(fun() ->
+                  Parent ! {block_call_result, self(),
+                            erpc:block_call(?TEST_NODE_1,
+                                            erpc_test_callback,
+                                            create_block_call_ets,
+                                            [])}
+          end),
+    receive
+        {block_call_result, Pid, Result} ->
+            ?assertEqual(true, Result)
+    end,
+    timer:sleep(1000),
+    ?assertEqual(true,
+                 erpc:call(?TEST_NODE_1, ets, info,
+                           [block_call_test, named_table])).
+
 erpc_multicall_test(_Config) ->
     ?assertEqual({[?TEST_NODE_1, ?TEST_NODE_2], []},
                  erpc:multicall([?TEST_NODE_1, ?TEST_NODE_2], erlang, node, [])),
-    ?assertEqual({[?TEST_NODE_2, ?TEST_NODE_1], []}, 
+    ?assertEqual({[?TEST_NODE_2, ?TEST_NODE_1], []},
                  erpc:multicall([?TEST_NODE_2, ?TEST_NODE_1], erlang, node, [])).
+
+erpc_abcast_test(_Config) ->
+    ?assertEqual({[true, true],[]},
+                 erpc:multicall([?TEST_NODE_1, ?TEST_NODE_2],
+                                erpc_test_callback, create_abcast_ets, [])),
+    ?assertEqual(abcast,
+                 erpc:abcast([?TEST_NODE_1, ?TEST_NODE_2],
+                             abcast_server, {insert_into_abcast_ets, {abcast_test, 1}})),
+    ?assertEqual({[[{abcast_test, 1}],[{abcast_test, 1}]], []},
+                 erpc:multicall([?TEST_NODE_1, ?TEST_NODE_2],
+                                erpc_test_callback, list_abcast_ets, [])).
+
+erpc_sbcast_test(_Config) ->
+    ?assertEqual({[true, true],[]},
+                 erpc:multicall([?TEST_NODE_1, ?TEST_NODE_2],
+                                erpc_test_callback, create_sbcast_ets, [])),
+    {Good, Bad} = erpc:sbcast([?TEST_NODE_1, ?TEST_NODE_2],
+                              sbcast_server, {insert_into_sbcast_ets, {sbcast_test, 1}}),
+    ?assertEqual([?TEST_NODE_1, ?TEST_NODE_2], lists:sort(Good)),
+    ?assertEqual([], lists:sort(Bad)),
+    ?assertEqual({[[{sbcast_test, 1}],[{sbcast_test, 1}]], []},
+                 erpc:multicall([?TEST_NODE_1, ?TEST_NODE_2],
+                                erpc_test_callback, list_sbcast_ets, [])),
+    {Good_2, Bad_2} = erpc:sbcast([?TEST_NODE_1, 'non_existent_node'],
+                                  sbcast_server, {insert_into_sbcast_ets, {sbcast_test, 1}}),
+    ?assertEqual([?TEST_NODE_1], Good_2),
+    ?assertEqual(['non_existent_node'], Bad_2).
 
 erpc_cast_test(_Config) ->
     Tab = erpc_cast_test_ets,
@@ -223,7 +274,7 @@ configure_test_nodes() ->
     Node_1 = erpc_test_1@localhost,
     rpc:call(Node_1, application, stop, [erpc]),
     rpc:call(Node_1, application, load, [erpc]),
-    rpc:call(Node_1, application, set_env, [erpc, server_config, 
+    rpc:call(Node_1, application, set_env, [erpc, server_config,
                                             [{transport, tcp},
                                              {listen_port, 9091},
                                              {default_node_acl, allow}]]),
@@ -232,7 +283,7 @@ configure_test_nodes() ->
     Node_2 = erpc_test_2@localhost,
     rpc:call(Node_2, application, stop, [erpc]),
     rpc:call(Node_2, application, load, [erpc]),
-    rpc:call(Node_2, application, set_env, [erpc, server_config, 
+    rpc:call(Node_2, application, set_env, [erpc, server_config,
                                             [{transport, tcp},
                                              {listen_port, 9092},
                                              {default_node_acl, allow}]]),
