@@ -30,10 +30,14 @@
          conn_status/0,
          connect/1,
          connect/2,
+         demonitor_connection/1,
+         demonitor_node/1,
          disconnect/1,
          eval_everywhere/4,
          incoming_conns/0,
-         is_connected/1,
+         is_connection_up/1,
+         monitor_connection/1,
+         monitor_node/1,
          multicall/4,
          multicall/5,
          multicast/4,
@@ -130,8 +134,8 @@ outgoing_conns() ->
     lists:usort(
       [Node || {_, _, Node} <- ets:tab2list(erpc_outgoing_conns)]).
 
-is_connected(Name) ->
-    erpc_lb:is_connected(Name).
+is_connection_up(Name) ->
+    erpc_lb:is_connection_up(Name).
 
 conn_status() ->
     erpc_lb:conn_status().
@@ -177,4 +181,16 @@ do_yield(Key, Timeout) ->
         after Timeout ->
             timeout
     end.
+
+monitor_node(Node_name) ->
+    erpc_monitor:monitor_node(Node_name, self()).
+
+monitor_connection(Conn_name) ->
+    erpc_monitor:monitor_connection(Conn_name, self()).
+
+demonitor_node(Node_name) ->
+    erpc_monitor:demonitor_node(Node_name, self()).
+
+demonitor_connection(Conn_name) ->
+    erpc_monitor:demonitor_connection(Conn_name, self()).
 

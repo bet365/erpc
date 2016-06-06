@@ -1,0 +1,22 @@
+digraph G {
+        rankdir = LR;
+	label = "Point to Point connection";
+        subgraph cluster_0 {
+		fontcolor = "red";
+                label = "client_node@host_1" ;
+                style = filled;
+                color = lightgrey;
+                node [style=filled,color=white];
+                erpc_1 [label = "erpc"];
+                app1 -> erpc_1 [label = "call(server_node@host_2, ...)"];
+        }
+        subgraph cluster_1 {
+		fontcolor = "red";
+                label = "server_node@host_2";
+                style = filled;
+                color = lightgrey;
+                node [style=filled,color=white];
+                erpc_2 [label = "erpc"];
+        }
+        erpc_1 -> erpc_2;
+}

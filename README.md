@@ -1,5 +1,19 @@
 # erpc
 
+## Contents
+- [Introduction](#introduction)
+- [Build and Test](#build-and-test)
+- [Configuration](#configuration)
+- [Dependencies](#dependencies)
+- [TODO](#todo)
+- [Example usage](#example-usage)
+- [API](#api)
+  - [Types](#types)
+- [Load test results](#load-test-results)
+- [License](#license)
+
+## Introduction
+
 This application is intended to be a replacement for native RPC. It
 tries to mimic the native rpc API as far as possible. It allows
 unidirectional connections between nodes. Where bi-directional
@@ -17,7 +31,14 @@ calling process.
 
 On the server side, a separate process is spawned for each request received.
 
-## Building
+The following figure shows a load-balanced connection.
+
+![Load balanced erpc connection](doc/erpc_lb_conn.png)
+
+The following figure shows a "traditional" point-to-point unidirectional erpc connection.
+![Point-to-point erpc connection](doc/erpc_p2p.png)
+
+## Build and Test
 
 ### Compile
 ```
@@ -142,8 +163,9 @@ None. Yay!
 
 1. Automeshing of nodes as an option
 1. Bi-directional connections as an option
-1. Monitoring of node connections (similar to erlang:monitor_node/2)
+1. **DONE** - Monitoring of node connections (similar to erlang:monitor_node/2)
 1. SCTP support
+1. **DONE** - Support for async_call and nb_yield similar to native RPC
 
 ## Example usage
 
@@ -216,10 +238,10 @@ ok
 16> erpc:multicast(['TEST_1', 'TEST_3'], calendar, local_time, []).
 ok
 
-17> erpc:is_connected('TEST_1').
+17> erpc:is_connection_up('TEST_1').
 true
 
-18> erpc:is_connected('TEST_3').
+18> erpc:is_connection_up('TEST_3').
 false
 
 %% Here, erpc figures out the host as localhost and assumes the default port value of 9090
@@ -240,7 +262,9 @@ ok
 
 ```
 
-## Types
+## API
+
+### Types
 
 ```erlang
 -type conn_name()       :: atom().
@@ -253,9 +277,6 @@ ok
 -type conn_option()     :: {hosts, [host_spec()]} | {num_connections, pos_integer()}.
 -type conn_status()     :: boolean().
 ```
-
-## API
-
 ### call/4
 
 Same as ``` call(Name, Module, Function, Args, 5000)```.
@@ -327,13 +348,68 @@ A separate set of processes is spawned under the `erpc_sup` supervisor so this c
 
 ### connect/2
 ```
-erlang(Conn_name :: conn_name(), Conn_options :: [conn_option()]) -> ok.
+connect(Conn_name :: conn_name(), Conn_options :: [conn_option()]) -> ok.
 ```
 
 ### disconnect/1
 ```erlang
 disconnect(Name :: conn_name()) -> ok.
 ```
+
+### is_connection_up/1
+```
+is_connection_up(Conn_name :: conn_name()) -> boolean().
+```
+
+Returns the status of the named connection.
+
+### monitor_node/1
+```
+monitor_node(Node_name :: node_name()) -> ok.
+```
+
+Monitors a remote erlang node using an erpc connection. When the erpc connection to the node is disconnected, the calling process will receive a message of the form:
+```erlang
+{erpc_node_down, node@host}
+```
+
+When the erpc connection is re-established, the calling process will receive a message of the form:
+```erlang
+{erpc_node_up, node@host}
+```
+
+The monitor stays active until the calling process explicitly invokes ```erpc:demonitor_node/1```.
+
+### demonitor_node/1
+```
+demonitor_node(Node_name :: node_name()) -> ok.
+```
+
+Removes a monitor setup using the ```monitor_node/1``` function.
+
+### monitor_connection/1
+```
+monitor_connection(Name :: conn_name()) -> ok.
+```
+
+Monitors a named erpc connection. When connections to all hosts which are part of this connection are down, the calling process will receive a message of the form (where 'TEST' is the name of the connection):
+```erlang
+{erpc_conn_down, 'TEST'}
+```
+
+When a connection is re-established to at least one of the hosts, the calling process will receive a message of the form (where 'TEST' is the name of the connection):
+```erlang
+{erpc_conn_up, 'TEST'}
+```
+
+The monitor stays active until the calling process explicitly invokes ```erpc:demonitor_connection/1```.
+
+### demonitor_connection/1
+```
+demonitor_connection(Name :: conn_name()) -> ok.
+```
+
+Removes a monitor setup using the ```monitor_connection/1``` function.
 
 ## Load test results
 

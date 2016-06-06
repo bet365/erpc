@@ -25,8 +25,8 @@
 
 -include_lib("common_test/include/ct.hrl").
 
--define(TEST_NODE_1, erpc_test_1@localhost).
--define(TEST_NODE_2, erpc_test_2@localhost).
+-define(TEST_NODE_1,   erpc_test_1@localhost).
+-define(TEST_NODE_2,   erpc_test_2@localhost).
 -define(SELF_CONN,     node()).
 -define(SELF_CONN_2,   node()).
 %%--------------------------------------------------------------------
@@ -35,7 +35,7 @@
 %% @end
 %%--------------------------------------------------------------------
 suite() ->
-    [{timetrap,{seconds,5}}].
+    [{timetrap,{seconds,10}}].
 
 %%--------------------------------------------------------------------
 %% @spec init_per_suite(Config0) ->
@@ -153,7 +153,9 @@ all() ->
      erpc_multicall_test,
      erpc_multicast_test,
      erpc_disconnect_test,
-     erpc_reconnect_test].
+     erpc_reconnect_test,
+     erpc_monitor_test
+    ].
 
 %%--------------------------------------------------------------------
 %% @spec TestCase(Config0) ->
@@ -270,6 +272,37 @@ erpc_reconnect_test(_Config) ->
     erpc_call_test(_Config),
     erpc_cast_test(_Config).
 
+erpc_monitor_test(_Config) ->
+    Node_1 = erpc_test_1@localhost,
+    Node_2 = erpc_test_2@localhost,
+    ok = erpc:connect('TEST', [{transport, tcp},
+                              {hosts, [{"localhost", 9091}, {"localhost", 9092}]}]),
+    ok = erpc:monitor_node(erpc_test_1@localhost),
+    ok = erpc:monitor_node(erpc_test_2@localhost),
+    ok = erpc:monitor_connection('TEST'),
+
+    %% Shutdown one of the nodes in the connection pool
+    ok = rpc:call(Node_1, application, stop, [erpc]),
+    wait_for_msg({erpc_node_down, Node_1}, {node_down_msg_not_recvd, Node_1}),
+    ?assert(erpc:is_connection_up('TEST')),
+    
+    %% Shutdown the last remaining node in the connection pool
+    ok = rpc:call(Node_2, application, stop, [erpc]),
+    wait_for_msg({erpc_node_down, Node_2}, {node_down_msg_not_recvd, Node_2}),
+    wait_for_msg({erpc_conn_down, 'TEST'}, {conn_down_msg_not_recvd, 'TEST'}),
+    ?assert(not erpc:is_connection_up('TEST')),
+
+    %% Restart one of the nodes
+    ok = rpc:call(Node_1, application, start, [erpc]),
+    wait_for_msg({erpc_node_up, Node_1}, {node_up_msg_not_recvd, Node_1}, 6000),
+    wait_for_msg({erpc_conn_up, 'TEST'}, {conn_up_msg_not_recvd, 'TEST'}),
+    ?assert(erpc:is_connection_up('TEST')),
+
+    %% Restart the second node
+    ok = rpc:call(Node_2, application, start, [erpc]),
+    wait_for_msg({erpc_node_up, Node_2}, {node_up_msg_not_recvd, Node_2}, 6000),
+    ?assert(erpc:is_connection_up('TEST')).
+
 configure_test_nodes() ->
     Node_1 = erpc_test_1@localhost,
     rpc:call(Node_1, application, stop, [erpc]),
@@ -288,3 +321,14 @@ configure_test_nodes() ->
                                              {listen_port, 9092},
                                              {default_node_acl, allow}]]),
     rpc:call(Node_2, application, ensure_all_started, [erpc]).
+
+wait_for_msg(Msg, Exception_if_not_recvd) ->
+    wait_for_msg(Msg, Exception_if_not_recvd, 1000).
+
+wait_for_msg(Msg, Exception_if_not_recvd, Timeout) ->
+    receive
+        Msg ->
+            ok
+    after Timeout ->
+            throw(Exception_if_not_recvd)
+    end.

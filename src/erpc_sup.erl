@@ -36,7 +36,8 @@ init([]) ->
     Client_config  = application:get_env(erpc, client_config, []),
     Client_specs   = client_child_specs(Client_config),
     Server_spec    = erpc_server_spec(),
-    {ok, {{one_for_one, 1, 5}, [Server_spec | Client_specs]}}.
+    Monitor_spec   = erpc_monitor_spec(),
+    {ok, {{one_for_one, 1, 5}, [Monitor_spec, Server_spec | Client_specs]}}.
 
 client_child_specs(Client_config) ->
     lists:flatten
@@ -60,6 +61,14 @@ erpc_server_spec() ->
     {'erpc_server',
      {'erpc_server', start_link, []},
      Restart, Shutdown, Type, ['erpc_server']}.
+
+erpc_monitor_spec() ->
+    Restart  = permanent,
+    Shutdown = 2000,
+    Type     = worker,
+    {'erpc_monitor',
+     {'erpc_monitor', start_link, []},
+     Restart, Shutdown, Type, ['erpc_monitor']}.
 
 connect(Conn_name) when is_atom(Conn_name) ->
     [_, Host] = string:tokens(atom_to_list(Conn_name), "@"),

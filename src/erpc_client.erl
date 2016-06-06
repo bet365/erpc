@@ -191,7 +191,6 @@ handle_info({ssl, _Socket, Data}, State) ->
     Result;
 
 handle_info(retry_connect, #client_state{conn_handle = Conn_handle,
-                                         conn_name   = Conn_name,
                                          conn_config = Conn_config,
                                          tmod        = TMod
                                         } = State) when Conn_handle =:= undefined ->
@@ -199,7 +198,6 @@ handle_info(retry_connect, #client_state{conn_handle = Conn_handle,
         {ok, Conn_handle_new} ->
             true      = ets:insert(erpc_outgoing_conns, {self(), TMod:host(Conn_handle_new), undefined}),
             {ok, Ref} = timer:send_interval(5000, self(), heartbeat),
-            ok        = erpc_lb:connected(Conn_name, TMod, Conn_handle_new),
             State_1   = State#client_state{conn_handle   = Conn_handle_new,
                                            heartbeat_ref = Ref},
             send_node_identity(State_1),
@@ -279,6 +277,8 @@ handle_incoming_data(#client_state{conn_handle = Conn_handle,
         {identity, Peer_node} ->
             log_msg("Client connected to peer-node ~p[~p]~n", [Conn_name, Peer_node]),
             ets:insert(erpc_outgoing_conns, {self(), TMod:host(Conn_handle), Peer_node}),
+            erpc_monitor:broadcast_node_up(Peer_node),
+            ok = erpc_lb:connected(Conn_name, TMod, Conn_handle),
             {noreply, State#client_state{peer_node = Peer_node}};
         _Err ->
             {stop, normal, State}
@@ -294,9 +294,11 @@ handle_conn_closed(#client_state{conn_name = Conn_name,
 cleanup(#client_state{tmod          = TMod,
                       conn_name     = Conn_name,
                       conn_handle   = Conn_handle,
-                      heartbeat_ref = Heart_ref} = State) ->
-    erpc_lb:disconnected(Conn_name),
+                      heartbeat_ref = Heart_ref,
+                      peer_node     = Peer_node} = State) ->
     ets:delete(erpc_outgoing_conns, self()),
+    erpc_monitor:broadcast_node_down(Peer_node),
+    erpc_lb:disconnected(Conn_name),
     catch TMod:close(Conn_handle),
     catch timer:cancel(Heart_ref),
     erlang:send_after(1000, self(), retry_connect),

@@ -26,7 +26,7 @@
          %% API
          start_link/1,
          conn_status/0,
-         is_connected/1,
+         is_connection_up/1,
          connected/3,
          disconnected/1,
          get_conn_pid/1,
@@ -41,7 +41,7 @@
         ]).
 
 
--record(state, {node_name, node_config, workers}).
+-record(state, {conn_name, node_config, workers}).
 
 -record(erpc_lb, {name, num_conns = 0, conns = []}).
 
@@ -58,7 +58,7 @@ connected(Name, TMod, Conn_handle) ->
 disconnected(Name) ->
     safe_call(Name, {disconnected, self()}).
 
-is_connected(Name) ->
+is_connection_up(Name) ->
     case ets:lookup(erpc_lb, Name) of
         [#erpc_lb{num_conns = Num_conns}] when Num_conns > 0 ->
             true;
@@ -68,7 +68,7 @@ is_connected(Name) ->
 
 conn_status() ->
     lists:map(fun(#erpc_lb{name = X_name}) ->
-                      {X_name, is_connected(X_name)}
+                      {X_name, is_connection_up(X_name)}
               end, ets:tab2list(erpc_lb)).
 
 get_conn_pid(Name) ->
@@ -102,16 +102,17 @@ safe_call(Name, Args) ->
 
 init([{Conn_name, Node_config}]) ->
     true = ets:insert(erpc_lb, #erpc_lb{name = Conn_name}),
-    {ok, #state{node_name   = Conn_name,
+    {ok, #state{conn_name   = Conn_name,
                 node_config = Node_config,
                 workers     = queue:new()
                }}.
 
 handle_call({connected, Item}, _From,
             #state{workers   = Worker_q,
-                   node_name = Name} = State) ->
+                   conn_name = Name} = State) ->
     Lb_rec = case ets:lookup(erpc_lb, Name) of
                  [] ->
+                     erpc_monitor:broadcast_conn_up(Name),
                      #erpc_lb{name = Name, num_conns = 1, conns = [Item]};
                  [#erpc_lb{num_conns = Num_conns_old,
                            conns     = Conns_old} = Lb_rec_old] ->
@@ -121,7 +122,7 @@ handle_call({connected, Item}, _From,
     true = ets:insert(erpc_lb, Lb_rec),
     {reply, ok, State#state{workers = queue:in(Item, Worker_q)}};
 
-handle_call({disconnected, Pid}, _From, #state{node_name = Name} = State) ->
+handle_call({disconnected, Pid}, _From, #state{conn_name = Name} = State) ->
     case ets:lookup(erpc_lb, Name) of
         [] ->
             ok;
@@ -134,7 +135,8 @@ handle_call({disconnected, Pid}, _From, #state{node_name = Name} = State) ->
                 Conns_old ->
                     ok;
                 [] ->
-                    ets:delete(erpc_lb, Name);
+                    ets:delete(erpc_lb, Name),
+                    erpc_monitor:broadcast_conn_down(Name);
                 Conns_old_1 ->
                     ets:insert(erpc_lb, Lb_rec_old#erpc_lb{num_conns = Num_conns_old - 1,
                                                            conns     = Conns_old_1})
