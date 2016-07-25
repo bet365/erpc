@@ -41,6 +41,8 @@
                 heart_ref
                }).
 
+-include("erpc.hrl").
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -163,7 +165,7 @@ handle_incoming_data(Data,
         heartbeat ->
             %% log_msg("Recvd heartbeat from client : ~p~n", [Peer_host]),
             {noreply, State#state{missed_heartbeats = 0}};
-        {call, Call_ref, Mod, Fun, Args} ->
+        {?CALL, Call_ref, Mod, Fun, Args} ->
             _ = case is_mf_allowed(Mod, Fun, ACL) of
                     true ->
                         spawn(fun() ->
@@ -173,7 +175,7 @@ handle_incoming_data(Data,
                         ok
                 end,
             {noreply, State};
-        {block_call, Call_ref, Mod, Fun, Args} ->
+        {?BLOCK_CALL, Call_ref, Mod, Fun, Args} ->
             _ = case is_mf_allowed(Mod, Fun, ACL) of
                     true ->
                         worker(Call_ref, TMod, Mod, Fun, Args, Conn_handle);
@@ -181,7 +183,7 @@ handle_incoming_data(Data,
                         ok
                 end,
             {noreply, State};
-        {cast, Mod, Fun, Args} ->
+        {?CAST, Mod, Fun, Args} ->
             _ = case is_mf_allowed(Mod, Fun, ACL) of
                     true ->
                         spawn(fun() ->
@@ -191,13 +193,13 @@ handle_incoming_data(Data,
                         ok
                 end,
             {noreply, State};
-        {abcast, Proc_name, Msg} ->
+        {?ABCAST, Proc_name, Msg} ->
             catch Proc_name ! Msg,
             {noreply, State};
-        {sbcast, Call_ref, Proc_name, Msg} ->
+        {?SBCAST, Call_ref, Proc_name, Msg} ->
             _ = worker(Call_ref, Proc_name, Msg, TMod, Conn_handle),
             {noreply, State};
-        {identity, Peer_node} ->
+        {?IDENTITY, Peer_node} ->
             log_msg("Server connected to peer node: ~p~n", [Peer_node]),
             ets:insert(erpc_incoming_conns, {self(), Peer_host, Peer_node}),
             send_node_identity(State),
@@ -227,15 +229,15 @@ worker(Mod, Fun, Args) ->
 
 worker(Call_ref, TMod, Mod, Fun, Args, Conn_handle) ->
     Res = (catch apply(Mod, Fun, Args)),
-    Reply = term_to_binary({call_result, Call_ref, Res}),
+    Reply = term_to_binary({?CALL_RESULT, Call_ref, Res}),
     ok = TMod:send(Conn_handle, Reply).
 
 worker(Call_ref, Proc_name, Msg, TMod, Conn_handle) ->
     Res = case catch Proc_name ! Msg of
                 {'EXIT', _} ->
-                    {sbcast_failed, Call_ref};
+                    {?SBCAST_FAILED, Call_ref};
                 Msg ->
-                    {sbcast_success, Call_ref}
+                    {?SBCAST_SUCCESS, Call_ref}
             end,
     Reply = term_to_binary(Res),
     ok = TMod:send(Conn_handle, Reply).
@@ -282,4 +284,4 @@ heartbeat() ->
 
 send_node_identity(#state{conn_handle = Conn_handle,
                           tmod        = TMod}) ->
-    ok = TMod:send(Conn_handle, term_to_binary({identity, node()})).
+    ok = TMod:send(Conn_handle, term_to_binary({?IDENTITY, node()})).

@@ -50,6 +50,8 @@
                        peer_node
                       }).
 
+-include("erpc.hrl").
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -61,9 +63,13 @@ call(Name, M, F, A, Timeout) ->
     case erpc_lb:get_conn_pid(Name) of
         {ok, {_Pid, TMod, Conn_handle}} ->
             Call_ref = make_call_ref(),
-            ok = TMod:send(Conn_handle, term_to_binary({call, Call_ref, M, F, A})),
-            Resp = wait_for_reply(Timeout, Call_ref),
-            Resp;
+            case TMod:send(Conn_handle, term_to_binary({?CALL, Call_ref, M, F, A})) of
+                ok ->
+                    Resp = wait_for_reply(Timeout, Call_ref),
+                    Resp;
+                _ ->
+                    {badrpc, not_connected}
+            end;
         _ ->
             {badrpc, not_connected}
     end.
@@ -72,9 +78,13 @@ block_call(Name, M, F, A, Timeout) ->
     case erpc_lb:get_conn_pid(Name) of
         {ok, {_Pid, TMod, Conn_handle}} ->
             Call_ref = make_call_ref(),
-            ok = TMod:send(Conn_handle, term_to_binary({block_call, Call_ref, M, F, A})),
-            Resp = wait_for_reply(Timeout, Call_ref),
-            Resp;
+            case TMod:send(Conn_handle, term_to_binary({?BLOCK_CALL, Call_ref, M, F, A})) of
+                ok ->
+                    Resp = wait_for_reply(Timeout, Call_ref),
+                    Resp;
+                _ ->
+                    {badrpc, not_connected}
+            end;
         _ ->
             {badrpc, not_connected}
     end.
@@ -89,7 +99,7 @@ make_call_ref() ->
 
 wait_for_reply(Timeout, Call_ref) ->
     receive
-        {call_result, Call_ref, Res} ->
+        {?CALL_RESULT, Call_ref, Res} ->
             Res;
         {conn_closed, Call_ref} ->
             {badrpc, conn_closed}
@@ -100,7 +110,12 @@ wait_for_reply(Timeout, Call_ref) ->
 cast(Name, M, F, A) ->
     case erpc_lb:get_conn_pid(Name) of
         {ok, {_Pid, TMod, Conn_handle}} ->
-            ok = TMod:send(Conn_handle, term_to_binary({cast, M, F, A}));
+            case TMod:send(Conn_handle, term_to_binary({?CAST, M, F, A})) of
+                ok ->
+                    ok;
+                _ ->
+                    {badrpc, not_connected}
+            end;
         _ ->
             {badrpc, not_connected}
     end.
@@ -110,7 +125,12 @@ abcast([], _Proc_name, _Msg) ->
 abcast([Name | T], Proc_name, Msg) ->
     case erpc_lb:get_conn_pid(Name) of
         {ok, {_Pid, TMod, Conn_handle}} ->
-            ok = TMod:send(Conn_handle, term_to_binary({abcast, Proc_name, Msg}));
+            case TMod:send(Conn_handle, term_to_binary({?ABCAST, Proc_name, Msg})) of
+                ok ->
+                    ok;
+                _ ->
+                    {badrpc, not_connected}
+            end;
         _ ->
             ok
     end,
@@ -131,19 +151,23 @@ sbcast(Parent_pid, Name, Proc_name, Msg) when is_atom(Name) ->
     case erpc_lb:get_conn_pid(Name) of
         {ok, {_Pid, TMod, Conn_handle}} ->
             Call_ref = make_call_ref(),
-            ok = TMod:send(Conn_handle, term_to_binary({sbcast, Call_ref, Proc_name, Msg})),
-            Resp = wait_for_sbcast_reply(Parent_pid, Name, Call_ref),
-            Resp;
+            case TMod:send(Conn_handle, term_to_binary({?SBCAST, Call_ref, Proc_name, Msg})) of
+                ok ->
+                    Resp = wait_for_sbcast_reply(Parent_pid, Name, Call_ref),
+                    Resp;
+                _ ->
+                    {badrpc, not_connected}
+            end;
         _ ->
-            Parent_pid ! {sbcast_failed, self(), Name}
+            Parent_pid ! {?SBCAST_FAILED, self(), Name}
     end.
 
 wait_for_sbcast_reply(Parent_pid, Name, Call_ref) ->
     receive
-        {sbcast_success, Call_ref} ->
-            Parent_pid ! {sbcast_success, self(), Name};
-        {sbcast_failed, Call_ref} ->
-            Parent_pid ! {sbcast_failed, self(), Name}
+        {?SBCAST_SUCCESS, Call_ref} ->
+            Parent_pid ! {?SBCAST_SUCCESS, self(), Name};
+        {?SBCAST_FAILED, Call_ref} ->
+            Parent_pid ! {?SBCAST_FAILED, self(), Name}
     end.
 
 wait_for_sbcast_results(Pids) ->
@@ -153,9 +177,9 @@ wait_for_sbcast_results([], Good, Bad) ->
     {Good, Bad};
 wait_for_sbcast_results([Pid | T], Good, Bad) ->
     receive
-        {sbcast_success, Pid, Name} ->
+        {?SBCAST_SUCCESS, Pid, Name} ->
             wait_for_sbcast_results(T, [Name | Good], Bad);
-        {sbcast_failed, Pid, Name} ->
+        {?SBCAST_FAILED, Pid, Name} ->
             wait_for_sbcast_results(T, Good, [Name | Bad])
     end.
 
@@ -265,16 +289,16 @@ handle_incoming_data(#client_state{conn_handle = Conn_handle,
     case catch binary_to_term(Data) of
         heartbeat ->
             {noreply, State#client_state{missed_heartbeats = 0}};
-        {call_result, {_, Caller_pid} = _Call_ref, _Res} = Call_result ->
+        {?CALL_RESULT, {_, Caller_pid} = _Call_ref, _Res} = Call_result ->
             Caller_pid ! Call_result,
             {noreply, State};
-        {sbcast_failed, {_, Caller_pid} = _Call_ref} = Call_result ->
+        {?SBCAST_FAILED, {_, Caller_pid} = _Call_ref} = Call_result ->
             Caller_pid ! Call_result,
             {noreply, State};
-        {sbcast_success, {_, Caller_pid} = _Call_ref} = Call_result ->
+        {?SBCAST_SUCCESS, {_, Caller_pid} = _Call_ref} = Call_result ->
             Caller_pid ! Call_result,
             {noreply, State};
-        {identity, Peer_node} ->
+        {?IDENTITY, Peer_node} ->
             log_msg("Client connected to peer-node ~p[~p]~n", [Conn_name, Peer_node]),
             ets:insert(erpc_outgoing_conns, {self(), TMod:host(Conn_handle), Peer_node}),
             erpc_monitor:broadcast_node_up(Peer_node),
@@ -311,4 +335,4 @@ heartbeat() ->
 
 send_node_identity(#client_state{conn_handle = Conn_handle,
                                  tmod        = TMod}) ->
-    ok = TMod:send(Conn_handle, term_to_binary({identity, node()})).
+    ok = TMod:send(Conn_handle, term_to_binary({?IDENTITY, node()})).

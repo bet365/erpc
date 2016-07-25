@@ -1,5 +1,7 @@
 # erpc
 
+This application is an alternative to the native Erlang RPC mechanism.
+
 ## Contents
 - [Introduction](#introduction)
 - [Build and Test](#build-and-test)
